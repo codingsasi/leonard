@@ -408,7 +408,7 @@ app.message(async ({ message, say, client }) => {
       });
 
       // Check for summary request
-      if (cleanText.toLowerCase().includes('summarize') || cleanText.toLowerCase().includes('summary')) {
+      if (cleanText.toLowerCase().includes('summarize') || cleanText.toLowerCase().includes('summarise') || cleanText.toLowerCase().includes('summary')) {
         const summary = await summarizeThreadWithAssistant(threadTs);
         await say({
           text: `📜 Thread Summary:\n\n${summary}`,
@@ -469,7 +469,7 @@ app.event('app_mention', async ({ event, say, client }) => {
     console.log('🔔 App mention thread ID:', threadTs);
 
         // Check for summary request
-    if (cleanText.toLowerCase().includes('summarize') || cleanText.toLowerCase().includes('summary')) {
+    if (cleanText.toLowerCase().includes('summarize') || cleanText.toLowerCase().includes('summarise') || cleanText.toLowerCase().includes('summary')) {
       const summary = await summarizeThreadWithAssistant(threadTs);
       await say({
         text: `📜 Thread Summary:\n\n${summary}`,
