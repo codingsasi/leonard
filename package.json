@@ -1,0 +1,24 @@
+{
+  "name": "leonard",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node index.js",
+    "test-setup": "node test-setup.js",
+    "test-assistant": "node test-assistant.js",
+    "migrate-threads": "node migrate-threads.js",
+    "stats": "node view-stats.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "@slack/bolt": "^4.4.0",
+    "dotenv": "^16.5.0",
+    "openai": "^5.3.0",
+    "undici": "^7.10.0"
+  }
+}

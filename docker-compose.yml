@@ -1,0 +1,38 @@
+version: '3.8'
+
+services:
+  leonard:
+    build: .
+    container_name: leonard-bot
+    restart: unless-stopped
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - SLACK_BOT_TOKEN=${SLACK_BOT_TOKEN}
+      - SLACK_SIGNING_SECRET=${SLACK_SIGNING_SECRET}
+      - SLACK_APP_TOKEN=${SLACK_APP_TOKEN}
+      - NODE_ENV=production
+    volumes:
+      # Persist data directory
+      - ./data:/app/data
+      # Optional: Mount logs directory if needed
+      - leonard-logs:/app/logs
+    # No ports needed for Socket Mode
+    healthcheck:
+      test: ["CMD", "node", "-e", "console.log('Health check passed')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    # Resource limits (optional)
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
+        reservations:
+          memory: 256M
+          cpus: '0.25'
+
+volumes:
+  leonard-logs:
+    driver: local
