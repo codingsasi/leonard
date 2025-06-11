@@ -407,7 +407,7 @@ app.message(async ({ message, say, client }) => {
         thread_ts: threadTs
       });
 
-            // Check for summary request
+      // Check for summary request
       if (cleanText.toLowerCase().includes('summarize') || cleanText.toLowerCase().includes('summary')) {
         const summary = await summarizeThreadWithAssistant(threadTs);
         await say({
@@ -463,7 +463,7 @@ app.event('app_mention', async ({ event, say, client }) => {
       return;
     }
 
-        // Use event timestamp as thread identifier
+    // Use event timestamp as thread identifier
     const threadTs = event.thread_ts || event.ts;
 
     console.log('🔔 App mention thread ID:', threadTs);
@@ -513,8 +513,7 @@ app.error((error) => {
 (async () => {
   try {
     console.log('🚀 Starting Leonard the Rhyming Bot...');
-
-        // Initialize OpenAI Assistant
+    // Initialize OpenAI Assistant
     console.log('🤖 Initializing OpenAI Assistant...');
     await getOrCreateAssistant();
 
@@ -525,11 +524,6 @@ app.error((error) => {
 
     await app.start();
     console.log('⚡️ Leonard the Rhyming Bot is running!');
-    console.log('🎭 Ready to respond to @leo mentions and DMs!');
-    console.log('🧵 Now with OpenAI Assistant & Thread memory!');
-    console.log('📂 Individual thread files stored in data/threads/');
-    console.log('📝 Thread format: sl-{thread_id}.json with assistant_id, thread_id, slack_thread_id');
-    console.log('📊 Global config stored in data/global-config.json');
     console.log(`📈 Stats: ${globalConfig.statistics.total_threads} threads, ${globalConfig.statistics.total_messages} messages, startup #${globalConfig.statistics.startup_count}`);
   } catch (error) {
     console.error('❌ Failed to start the app:', error);
