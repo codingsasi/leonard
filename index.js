@@ -363,22 +363,47 @@ async function summarizeThreadWithAssistant(slackThreadId) {
   }
 }
 
-app.message(async ({ message, say, client }) => {
+// Listen for mentions of "Leo" or "Leonard" in text (not @mentions or DMs)
+app.message(/\b(leo|leonard)\b/i, async ({ message, say, client }) => {
   try {
-    console.log('🔍 Message received:', message.text);
     // Get bot user ID
     const authResult = await client.auth.test();
     const botUserId = authResult.user_id;
-    console.log('🤖 Bot User ID:', botUserId);
 
-    // Check if bot is mentioned or if it's a DM
+    // Only respond if it's NOT an actual @mention AND NOT a DM (we handle those separately)
+    const isActualMention = message.text && message.text.includes(`<@${botUserId}>`);
+    const isDM = message.channel_type === 'im';
+
+    if (!isActualMention && !isDM) {
+      const threadTs = message.thread_ts || message.ts;
+
+      const mentionResponse = "Hey, did someone mention me? Use my handle @Leo to get me involved in the conversation! 🎭";
+
+      await say({
+        text: mentionResponse,
+        thread_ts: threadTs
+      });
+    }
+  } catch (error) {
+    console.error('Error handling name mention:', error);
+  }
+});
+
+// Listen for @mentions and DMs
+app.message(async ({ message, say, client }) => {
+  try {
+    // Get bot user ID
+    const authResult = await client.auth.test();
+    const botUserId = authResult.user_id;
+
+    // Respond to @mentions OR direct messages
     const isMentioned = message.text && message.text.includes(`<@${botUserId}>`);
     const isDM = message.channel_type === 'im';
 
     console.log('🔍 Mention check:', { isMentioned, isDM, messageText: message.text });
 
     if (isMentioned || isDM) {
-      // Clean the message text (remove bot mention)
+      // Clean the message text (remove bot mention if it exists)
       let cleanText = message.text;
       if (isMentioned) {
         cleanText = cleanText.replace(`<@${botUserId}>`, '').trim();
