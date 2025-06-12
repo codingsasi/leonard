@@ -13,6 +13,7 @@ A helpful conversational Slack bot with multiple personality modes. This bot sho
 - 🔄 **Message Syncing**: Automatically syncs Slack thread history to maintain context
 - ⚡ **Queue Management**: Handles concurrent requests efficiently with per-thread queuing
 - 📊 **Confluence Integration**: Creates confluence page from instructions
+- 📊 **Jira Integration**: Creates jira issues from instructions
 
 ## Prerequisites
 
@@ -34,6 +35,8 @@ A helpful conversational Slack bot with multiple personality modes. This bot sho
    SLACK_SIGNING_SECRET=your-signing-secret
    SLACK_APP_TOKEN=xapp-your-app-token
    OPENAI_API_KEY=your-openai-api-key
+   JIRA_EMAIL=your-jira-email
+   JIRA_API_TOKEN=your-jira-token
    ```
 
 3. **Create data directory structure**:
@@ -69,35 +72,59 @@ docker compose up --build -d
    ```json
     {
       "assistants": {
-        "normal": null,
-        "rhyme": null,
-        "leonard": null
+         "normal": null,
+         "rhyme": null,
+         "leonard": null,
       },
       "default_mode": "normal",
       "bot_settings": {
-        "name": "Leo - Multi-Mode Bot",
-        "model": "gpt-4o-mini",
-        "max_tokens": 10000,
-        "temperature": 0.7,
-        "created_at": "2025-06-11T22:23:20.627Z",
-        "last_updated": "2025-06-11T22:23:20.627Z"
+         "name": "Leo - Multi-Mode Bot",
+         "model": "gpt-4o-mini",
+         "max_tokens": 10000,
+         "temperature": 0.7,
+         "created_at": "2025-06-11T22:23:20.627Z",
+         "last_updated": "2025-06-12T04:36:13.012Z"
+      },
+      "confluence_settings": {
+         "enabled": true,
+         "base_url": "https://your-domain.atlassian.net",
+         "space_key": "TL",
+         "parent_page_title": "Pages created by leo",
+         "page_labels": ["slack-bot", "auto-generated"]
+      },
+      "jira_settings": {
+         "enabled": true,
+         "base_url": "https://your-domain.atlassian.net",
+         "project_key": "TP",
+         "default_issue_type": "Task",
+         "default_priority": "Medium",
+         "default_components": ["slack-bot"],
+         "default_labels": ["slack-bot", "auto-generated"],
+         "default_assignee": ""
       },
       "statistics": {
-        "total_threads": 2,
-        "total_messages": 6,
-        "startup_count": 4,
-        "mode_switches": 0,
-        "last_startup": "2025-06-11T23:14:20.112Z",
-        "last_updated": "2025-06-11T23:14:50.300Z"
+         "total_threads": 18,
+         "total_messages": 24,
+         "startup_count": 15,
+         "mode_switches": 3,
+         "confluence_pages_created": 0,
+         "jira_issues_created": 0,
+         "last_startup": "2025-06-12T16:34:15.108Z",
+         "last_updated": "2025-06-12T16:34:15.108Z"
       },
       "metadata": {
-        "version": "3.0",
-        "description": "Global configuration for Leo Multi-Mode Slack Bot",
-        "thread_storage_format": "individual_files",
-        "created": "2025-01-12T18:15:00.000Z",
-        "modes_available": ["normal", "rhyme", "leonard"]
+         "version": "3.0",
+         "description": "Global configuration for Leo Multi-Mode Slack Bot",
+         "thread_storage_format": "individual_files",
+         "created": "2025-01-12T18:15:00.000Z",
+         "modes_available": [
+            "normal",
+            "rhyme",
+            "leonard"
+         ]
       }
-    }
+   }
+
    ```
 
 ### Production Deployment Tips

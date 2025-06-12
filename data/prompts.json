@@ -61,6 +61,6 @@
     "modes_available": ["normal", "rhyme", "leonard"],
     "creator": "Abhai Sasidharan (@codingsasi)",
     "repository": "https://github.com/codingsasi/leonard",
-    "purpose": "Learning project showcasing Slack API + ChatGPT integration"
+    "purpose": "Learning project showcasing Slack API + ChatGPT + Confluence + Jira integration"
   }
 }
