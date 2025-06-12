@@ -365,7 +365,7 @@ async function summarizeThreadWithAssistant(slackThreadId) {
 
 app.message(async ({ message, say, client }) => {
   try {
-
+    console.log('🔍 Message received:', message.text);
     // Get bot user ID
     const authResult = await client.auth.test();
     const botUserId = authResult.user_id;
