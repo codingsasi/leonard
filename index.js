@@ -141,7 +141,7 @@ async function syncSlackMessagesToOpenAI(client, channel, slackThreadId, openaiT
       });
 
       latestTs = message.ts;
-      console.log(`📝 Synced message from ${message.user}: ${message.text.substring(0, 50)}...`);
+      console.log(`📝 Synced message from ${message.user}`);
     }
 
     // Update thread data with latest processed timestamp
@@ -327,7 +327,7 @@ async function summarizeThreadWithAssistant(slackThreadId) {
     // Add summary request to thread
     await openai.beta.threads.messages.create(threadData.thread_id, {
       role: "user",
-      content: "Please provide a rhyming summary of our entire conversation thread so far. Include the main topics we discussed and key points covered."
+      content: "Please provide a summary of our entire conversation thread so far. Include the main topics we discussed and key points covered."
     });
 
     // Create and run the assistant
@@ -352,7 +352,6 @@ async function summarizeThreadWithAssistant(slackThreadId) {
 
       if (lastMessage.role === 'assistant') {
         const summary = lastMessage.content[0].text.value;
-        console.log('📋 Thread summary:', summary);
         return summary;
       }
     }
@@ -364,11 +363,8 @@ async function summarizeThreadWithAssistant(slackThreadId) {
   }
 }
 
-// Listen for messages mentioning the bot
 app.message(async ({ message, say, client }) => {
   try {
-    console.log('📨 Received message:', message.text);
-    console.log('📝 Message details:', { channel: message.channel, user: message.user, channel_type: message.channel_type });
 
     // Get bot user ID
     const authResult = await client.auth.test();
@@ -444,10 +440,7 @@ app.message(async ({ message, say, client }) => {
 // Listen for app mentions specifically
 app.event('app_mention', async ({ event, say, client }) => {
   try {
-    console.log('🔔 App mention received:', event.text);
-    console.log('📋 Event details:', { channel: event.channel, user: event.user });
-
-        // Get bot user ID to properly clean mentions
+    // Get bot user ID to properly clean mentions
     const authResult = await client.auth.test();
     const botUserId = authResult.user_id;
 
@@ -466,9 +459,7 @@ app.event('app_mention', async ({ event, say, client }) => {
     // Use event timestamp as thread identifier
     const threadTs = event.thread_ts || event.ts;
 
-    console.log('🔔 App mention thread ID:', threadTs);
-
-        // Check for summary request
+    // Check for summary request
     if (cleanText.toLowerCase().includes('summarize') || cleanText.toLowerCase().includes('summarise') || cleanText.toLowerCase().includes('summary')) {
       const summary = await summarizeThreadWithAssistant(threadTs);
       await say({
