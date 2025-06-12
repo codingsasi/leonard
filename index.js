@@ -432,16 +432,14 @@ async function summarizeThreadWithAssistant(slackThreadId, client, channel) {
   try {
     console.log('📊 Summarizing thread with assistant:', slackThreadId);
 
-    // Get thread data
-    const threadData = loadThreadData(slackThreadId);
-    if (!threadData || !threadData.thread_id) {
-      return "I don't see any conversation history to summarize yet. Start chatting with me first! 🧵";
-    }
-
-    // Get current mode and assistant
+    // Get current mode
     const currentMode = getThreadMode(slackThreadId);
+
+    // Get or create assistant for current mode
     const assistant = await getOrCreateAssistant(currentMode);
-    const openaiThreadId = threadData.thread_id;
+
+    // Get or create OpenAI thread
+    const openaiThreadId = await getOrCreateOpenAIThread(slackThreadId, currentMode);
 
     // Sync any new messages from Slack thread to OpenAI thread before summarizing
     await syncSlackMessagesToOpenAI(client, channel, slackThreadId, openaiThreadId);
