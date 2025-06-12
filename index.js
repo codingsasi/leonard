@@ -127,12 +127,27 @@ async function getSlackThreadMessagesSince(client, channel, threadTs, sinceTs = 
   try {
     console.log('📥 Fetching Slack thread messages since:', sinceTs || 'beginning');
 
-    const result = await client.conversations.replies({
-      channel: channel,
-      ts: threadTs,
-      inclusive: true,
-      oldest: sinceTs || undefined
-    });
+    // Check if this is a DM (channel starts with 'D') vs a channel thread
+    const isDM = channel.startsWith('D');
+    let result;
+
+    if (isDM) {
+      // For DMs, use conversations.history to get the conversation history
+      result = await client.conversations.history({
+        channel: channel,
+        inclusive: true,
+        oldest: sinceTs || undefined,
+        limit: 100  // Limit to recent messages
+      });
+    } else {
+      // For channel threads, use conversations.replies
+      result = await client.conversations.replies({
+        channel: channel,
+        ts: threadTs,
+        inclusive: true,
+        oldest: sinceTs || undefined
+      });
+    }
 
     if (!result.messages || result.messages.length === 0) {
       console.log('📭 No new messages found in thread');
@@ -153,7 +168,7 @@ async function getSlackThreadMessagesSince(client, channel, threadTs, sinceTs = 
       return true;
     });
 
-    console.log(`📨 Found ${filteredMessages.length} new messages to sync`);
+    console.log(`📨 Found ${filteredMessages.length} new messages to sync (${isDM ? 'DM' : 'thread'})`);
     return filteredMessages;
   } catch (error) {
     console.error('❌ Error fetching Slack thread messages:', error);
@@ -413,7 +428,7 @@ async function generateResponseWithAssistant(message, slackThreadId, client, cha
 }
 
 // Function to summarize thread using OpenAI Assistant
-async function summarizeThreadWithAssistant(slackThreadId) {
+async function summarizeThreadWithAssistant(slackThreadId, client, channel) {
   try {
     console.log('📊 Summarizing thread with assistant:', slackThreadId);
 
@@ -427,6 +442,9 @@ async function summarizeThreadWithAssistant(slackThreadId) {
     const currentMode = getThreadMode(slackThreadId);
     const assistant = await getOrCreateAssistant(currentMode);
     const openaiThreadId = threadData.thread_id;
+
+    // Sync any new messages from Slack thread to OpenAI thread before summarizing
+    await syncSlackMessagesToOpenAI(client, channel, slackThreadId, openaiThreadId);
 
     // Add summary request to thread
     await openai.beta.threads.messages.create(openaiThreadId, {
@@ -595,7 +613,7 @@ app.event('app_mention', async ({ event, say, client }) => {
 
         // Check for summary request
     if (cleanText.toLowerCase().includes('summarize') || cleanText.toLowerCase().includes('summarise') || cleanText.toLowerCase().includes('summary')) {
-      const summary = await summarizeThreadWithAssistant(threadTs);
+      const summary = await summarizeThreadWithAssistant(threadTs, client, event.channel);
       await say({
         text: `📜 Thread Summary:\n\n${summary}`,
         channel: event.channel,
