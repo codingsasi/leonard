@@ -176,6 +176,24 @@ async function getSlackThreadMessagesSince(client, channel, threadTs, sinceTs = 
   }
 }
 
+// Function to get user display name from Slack user ID
+async function getUserDisplayName(client, userId) {
+  try {
+    const result = await client.users.info({ user: userId });
+    if (result.ok && result.user) {
+      // Try display_name first, then real_name, then name as fallback
+      return result.user.profile?.display_name ||
+             result.user.profile?.real_name ||
+             result.user.name ||
+             userId; // fallback to ID if nothing else works
+    }
+    return userId; // fallback to ID if API call fails
+  } catch (error) {
+    console.error('❌ Error fetching user info for:', userId, error);
+    return userId; // fallback to ID on error
+  }
+}
+
 // Function to sync new Slack messages to OpenAI thread
 async function syncSlackMessagesToOpenAI(client, channel, slackThreadId, openaiThreadId) {
   try {
@@ -197,7 +215,7 @@ async function syncSlackMessagesToOpenAI(client, channel, slackThreadId, openaiT
     let latestTs = lastProcessedTs;
     for (const message of newMessages) {
       // Format the message for context
-      const contextMessage = `[${message.user}]: ${message.text}`;
+      const contextMessage = `[${await getUserDisplayName(client, message.user)}]: ${message.text}`;
 
       await openai.beta.threads.messages.create(openaiThreadId, {
         role: "user",
@@ -205,7 +223,7 @@ async function syncSlackMessagesToOpenAI(client, channel, slackThreadId, openaiT
       });
 
       latestTs = message.ts;
-      console.log(`📝 Synced message from ${message.user}`);
+      console.log(`📝 Synced message from ${await getUserDisplayName(client, message.user)}`);
     }
 
     // Update thread data with latest processed timestamp
@@ -222,6 +240,8 @@ async function syncSlackMessagesToOpenAI(client, channel, slackThreadId, openaiT
     return null;
   }
 }
+
+
 
 // Function to get or create OpenAI Assistant for a specific mode
 async function getOrCreateAssistant(mode = 'normal') {
@@ -447,7 +467,7 @@ async function summarizeThreadWithAssistant(slackThreadId, client, channel) {
     // Add summary request to thread
     await openai.beta.threads.messages.create(openaiThreadId, {
       role: "user",
-      content: "Please provide a summary of our entire conversation thread so far. Include the main topics we discussed and key points covered."
+      content: "Please provide a summary of our entire conversation thread so far. Include the main topics we discussed and key points covered. Keep it organized using bullet points, paragraphs, and other formatting as needed."
     });
 
     // Queue the assistant run to prevent concurrent runs on same thread
