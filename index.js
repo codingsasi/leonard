@@ -208,47 +208,93 @@ async function syncSlackMessagesToOpenAI(client, channel, slackThreadId, openaiT
   }
 }
 
-// Function to create or get OpenAI Assistant
-async function getOrCreateAssistant() {
+// Function to get or create OpenAI Assistant for a specific mode
+async function getOrCreateAssistant(mode = 'normal') {
   try {
-    // If we already have an assistant ID in global config, try to retrieve it
-    if (globalConfig.assistant_id) {
+    // Validate mode
+    if (!prompts.modes[mode]) {
+      console.log(`⚠️ Invalid mode '${mode}', using default mode '${prompts.default_mode}'`);
+      mode = prompts.default_mode;
+    }
+
+    // If we already have an assistant ID for this mode, try to retrieve it
+    if (globalConfig.assistants[mode]) {
       try {
-        const assistant = await openai.beta.assistants.retrieve(globalConfig.assistant_id);
-        console.log('🤖 Using existing assistant:', assistant.id);
+        const assistant = await openai.beta.assistants.retrieve(globalConfig.assistants[mode]);
+        console.log(`🤖 Using existing ${mode} assistant:`, assistant.id);
         return assistant;
       } catch (error) {
-        console.log('⚠️ Existing assistant not found, creating new one');
-        globalConfig.assistant_id = null;
+        console.log(`⚠️ Existing ${mode} assistant not found, creating new one`);
+        globalConfig.assistants[mode] = null;
       }
     }
 
-    // Create new assistant
-    console.log('🚀 Creating new OpenAI Assistant...');
+    // Create new assistant for this mode
+    console.log(`🚀 Creating new OpenAI Assistant for ${mode} mode...`);
     const assistant = await openai.beta.assistants.create({
-      name: globalConfig.bot_settings.name,
-      instructions: prompts.system_prompt,
+      name: `${globalConfig.bot_settings.name} - ${prompts.modes[mode].name}`,
+      instructions: prompts.modes[mode].system_prompt,
       model: globalConfig.bot_settings.model,
       tools: [],
       response_format: { type: "text" }
     });
 
-    // Save the assistant ID and settings to global config
-    globalConfig.assistant_id = assistant.id;
-    globalConfig.bot_settings.created_at = new Date().toISOString();
+    // Save the assistant ID to global config
+    globalConfig.assistants[mode] = assistant.id;
     globalConfig.bot_settings.last_updated = new Date().toISOString();
     saveGlobalConfig();
 
-    console.log('✅ Created new assistant:', assistant.id);
+    console.log(`✅ Created new ${mode} assistant:`, assistant.id);
     return assistant;
   } catch (error) {
-    console.error('❌ Error creating/getting assistant:', error);
+    console.error(`❌ Error creating/getting ${mode} assistant:`, error);
     throw error;
   }
 }
 
-// Function to get or create OpenAI thread for a Slack thread
-async function getOrCreateOpenAIThread(slackThreadId) {
+// Function to get current mode for a thread
+function getThreadMode(slackThreadId) {
+  const threadData = loadThreadData(slackThreadId);
+  return threadData?.current_mode || prompts.default_mode;
+}
+
+// Function to set mode for a thread
+function setThreadMode(slackThreadId, mode) {
+  const threadData = loadThreadData(slackThreadId) || {};
+  threadData.current_mode = mode;
+  threadData.last_mode_change = new Date().toISOString();
+  saveThreadData(slackThreadId, threadData);
+
+  // Update global statistics
+  globalConfig.statistics.mode_switches += 1;
+  saveGlobalConfig();
+
+  console.log(`🔄 Set thread ${slackThreadId} to ${mode} mode`);
+}
+
+// Function to parse mode switch commands
+function parseModeCommand(text) {
+  const lowerText = text.toLowerCase().trim();
+
+  // Look for mode switch patterns
+  const patterns = [
+    /(?:turn on|switch to|change to|use|set|enable)\s+(normal|rhyme|leonard)\s*mode/i,
+    /(?:mode|switch)\s+(normal|rhyme|leonard)/i,
+    /(normal|rhyme|leonard)\s*mode/i
+  ];
+
+  for (const pattern of patterns) {
+    const match = lowerText.match(pattern);
+    if (match) {
+      return match[1].toLowerCase();
+    }
+  }
+
+  return null;
+}
+
+// Function to get or create OpenAI thread for a Slack thread with mode support
+async function getOrCreateOpenAIThread(slackThreadId, mode = 'normal') {
   try {
     // Check if we already have thread data
     const existingData = loadThreadData(slackThreadId);
@@ -257,8 +303,8 @@ async function getOrCreateOpenAIThread(slackThreadId) {
       return existingData.thread_id;
     }
 
-    // Get or create assistant
-    const assistant = await getOrCreateAssistant();
+    // Get or create assistant for the current mode
+    const assistant = await getOrCreateAssistant(mode);
 
     // Create new OpenAI thread
     console.log('🆕 Creating new OpenAI thread for Slack thread:', slackThreadId);
@@ -269,6 +315,7 @@ async function getOrCreateOpenAIThread(slackThreadId) {
       assistant_id: assistant.id,
       thread_id: thread.id,
       slack_thread_id: slackThreadId,
+      current_mode: mode,
       created_at: new Date().toISOString(),
       last_processed_message_ts: null
     };
@@ -286,16 +333,17 @@ async function getOrCreateOpenAIThread(slackThreadId) {
   }
 }
 
-// Function to generate response using OpenAI Assistant
-async function generateRhymingResponseWithAssistant(message, slackThreadId, client, channel, messageTs) {
+// Function to generate response using OpenAI Assistant with mode support
+async function generateResponseWithAssistant(message, slackThreadId, client, channel, messageTs) {
   try {
-    console.log('🎨 Generating rhyme with assistant for:', message);
+    const currentMode = getThreadMode(slackThreadId);
+    console.log(`🎨 Generating response in ${currentMode} mode for:`, message);
 
-    // Get or create assistant
-    const assistant = await getOrCreateAssistant();
+    // Get or create assistant for current mode
+    const assistant = await getOrCreateAssistant(currentMode);
 
     // Get or create OpenAI thread
-    const openaiThreadId = await getOrCreateOpenAIThread(slackThreadId);
+    const openaiThreadId = await getOrCreateOpenAIThread(slackThreadId, currentMode);
 
     // Sync any new messages from Slack thread to OpenAI thread
     await syncSlackMessagesToOpenAI(client, channel, slackThreadId, openaiThreadId);
@@ -309,7 +357,7 @@ async function generateRhymingResponseWithAssistant(message, slackThreadId, clie
     // Queue the assistant run to prevent concurrent runs on same thread
     const response = await queueThreadRequest(async () => {
       // Create and run the assistant
-      console.log('🏃 Running assistant...');
+      console.log(`🏃 Running ${currentMode} assistant...`);
       const run = await openai.beta.threads.runs.create(openaiThreadId, {
         assistant_id: assistant.id
       });
@@ -333,7 +381,7 @@ async function generateRhymingResponseWithAssistant(message, slackThreadId, clie
 
         if (lastMessage.role === 'assistant') {
           const responseText = lastMessage.content[0].text.value;
-          console.log('✨ Assistant response:', responseText);
+          console.log(`✨ ${currentMode} assistant response:`, responseText);
 
           // Update thread data with current message timestamp as last processed
           const threadData = loadThreadData(slackThreadId);
@@ -372,11 +420,12 @@ async function summarizeThreadWithAssistant(slackThreadId) {
     // Get thread data
     const threadData = loadThreadData(slackThreadId);
     if (!threadData || !threadData.thread_id) {
-      return "A summary you seek, but no thread I see, start a conversation and I'll summarize with glee! 🧵";
+      return "I don't see any conversation history to summarize yet. Start chatting with me first! 🧵";
     }
 
-    // Get or create assistant
-    const assistant = await getOrCreateAssistant();
+    // Get current mode and assistant
+    const currentMode = getThreadMode(slackThreadId);
+    const assistant = await getOrCreateAssistant(currentMode);
     const openaiThreadId = threadData.thread_id;
 
     // Add summary request to thread
@@ -413,13 +462,13 @@ async function summarizeThreadWithAssistant(slackThreadId) {
         }
       }
 
-      return "A summary I tried to make with care, but errors appeared from thin air! 📝";
+      return "I had trouble creating that summary. Please try again! 📝";
     }, openaiThreadId);
 
     return summary;
   } catch (error) {
     console.error('❌ Error summarizing thread:', error);
-    return "A summary I tried to make with care, but errors appeared from thin air! 📝";
+    return "I had trouble creating that summary. Please try again! 📝";
   }
 }
 
@@ -449,36 +498,34 @@ app.message(/\b(leo|leonard)\b/i, async ({ message, say, client }) => {
   }
 });
 
-// Listen for @mentions and DMs
+// Dms only
 app.message(async ({ message, say, client }) => {
   try {
     // Get bot user ID
     const authResult = await client.auth.test();
     const botUserId = authResult.user_id;
 
-    // Respond to @mentions OR direct messages
-    const isMentioned = message.text && message.text.includes(`<@${botUserId}>`);
+    // Respond to DMs only
     const isDM = message.channel_type === 'im';
 
-    console.log('🔍 Mention check:', { isMentioned, isDM, messageText: message.text });
-
-    if (isMentioned || isDM) {
-      // Clean the message text (remove bot mention if it exists)
-      let cleanText = message.text;
-      if (isMentioned) {
-        cleanText = cleanText.replace(`<@${botUserId}>`, '').trim();
-      }
-
-      // Skip if message is empty after cleaning
-      if (!cleanText) {
-        await say(prompts.error_prompts.empty_message);
-        return;
-      }
+    if (isDM) {
+      const messageText = message.text || '';
 
       // Use message timestamp as thread identifier (either thread_ts or message ts)
       const threadTs = message.thread_ts || message.ts;
 
       console.log('🧵 Thread ID:', threadTs);
+
+      // Check for mode switch command
+      const newMode = parseModeCommand(messageText);
+      if (newMode) {
+        setThreadMode(threadTs, newMode);
+        await say({
+          text: prompts.mode_switch_responses[newMode],
+          thread_ts: threadTs
+        });
+        return;
+      }
 
       // Show typing indicator with random thinking prompt
       const randomThinking = prompts.thinking_prompts[Math.floor(Math.random() * prompts.thinking_prompts.length)];
@@ -488,19 +535,9 @@ app.message(async ({ message, say, client }) => {
         thread_ts: threadTs
       });
 
-      // Check for summary request
-      if (cleanText.toLowerCase().includes('summarize') || cleanText.toLowerCase().includes('summarise') || cleanText.toLowerCase().includes('summary')) {
-        const summary = await summarizeThreadWithAssistant(threadTs);
-        await say({
-          text: `📜 Thread Summary:\n\n${summary}`,
-          thread_ts: threadTs
-        });
-        return;
-      }
-
-      // Generate rhyming response using OpenAI Assistant
-      const rhymingResponse = await generateRhymingResponseWithAssistant(
-        cleanText,
+      // Generate response using OpenAI Assistant
+      const response = await generateResponseWithAssistant(
+        messageText,
         threadTs,
         client,
         message.channel,
@@ -509,7 +546,7 @@ app.message(async ({ message, say, client }) => {
 
       // Send the response
       await say({
-        text: rhymingResponse,
+        text: response,
         thread_ts: threadTs
       });
     }
@@ -544,7 +581,19 @@ app.event('app_mention', async ({ event, say, client }) => {
     // Use event timestamp as thread identifier
     const threadTs = event.thread_ts || event.ts;
 
-    // Check for summary request
+    // Check for mode switch command
+    const newMode = parseModeCommand(cleanText);
+    if (newMode) {
+      setThreadMode(threadTs, newMode);
+      await say({
+        text: prompts.mode_switch_responses[newMode],
+        channel: event.channel,
+        thread_ts: threadTs
+      });
+      return;
+    }
+
+        // Check for summary request
     if (cleanText.toLowerCase().includes('summarize') || cleanText.toLowerCase().includes('summarise') || cleanText.toLowerCase().includes('summary')) {
       const summary = await summarizeThreadWithAssistant(threadTs);
       await say({
@@ -555,8 +604,17 @@ app.event('app_mention', async ({ event, say, client }) => {
       return;
     }
 
-    // Generate rhyming response using OpenAI Assistant
-    const rhymingResponse = await generateRhymingResponseWithAssistant(
+    // Show typing indicator with random thinking prompt
+    const currentMode = getThreadMode(threadTs);
+    const randomThinking = prompts.thinking_prompts[Math.floor(Math.random() * prompts.thinking_prompts.length)];
+    await client.chat.postMessage({
+      channel: event.channel,
+      text: `${randomThinking} (${prompts.modes[currentMode].name})`,
+      thread_ts: threadTs
+    });
+
+    // Generate response using OpenAI Assistant
+    const response = await generateResponseWithAssistant(
       cleanText,
       threadTs,
       client,
@@ -566,7 +624,7 @@ app.event('app_mention', async ({ event, say, client }) => {
 
     // Send the response
     await say({
-      text: rhymingResponse,
+      text: response,
       channel: event.channel,
       thread_ts: threadTs
     });
@@ -588,10 +646,19 @@ app.error((error) => {
 // Start the app
 (async () => {
   try {
-    console.log('🚀 Starting Leonard the Rhyming Bot...');
-    // Initialize OpenAI Assistant
-    console.log('🤖 Initializing OpenAI Assistant...');
-    await getOrCreateAssistant();
+    console.log('🚀 Starting Leo Multi-Mode Bot...');
+
+    // Initialize OpenAI Assistants for all modes
+    console.log('🤖 Initializing OpenAI Assistants for all modes...');
+    const availableModes = Object.keys(prompts.modes);
+    for (const mode of availableModes) {
+      try {
+        await getOrCreateAssistant(mode);
+        console.log(`✅ ${mode} mode assistant ready`);
+      } catch (error) {
+        console.error(`❌ Failed to initialize ${mode} assistant:`, error);
+      }
+    }
 
     // Update startup statistics
     globalConfig.statistics.startup_count += 1;
@@ -599,8 +666,9 @@ app.error((error) => {
     saveGlobalConfig();
 
     await app.start();
-    console.log('⚡️ Leonard the Rhyming Bot is running!');
-    console.log(`📈 Stats: ${globalConfig.statistics.total_threads} threads, ${globalConfig.statistics.total_messages} messages, startup #${globalConfig.statistics.startup_count}`);
+    console.log('⚡️ Leo Multi-Mode Bot is running!');
+    console.log(`🎭 Available modes: ${availableModes.join(', ')}`);
+    console.log(`📈 Stats: ${globalConfig.statistics.total_threads} threads, ${globalConfig.statistics.total_messages} messages, ${globalConfig.statistics.mode_switches} mode switches, startup #${globalConfig.statistics.startup_count}`);
   } catch (error) {
     console.error('❌ Failed to start the app:', error);
   }
