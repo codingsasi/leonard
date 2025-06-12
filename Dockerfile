@@ -12,6 +12,7 @@ RUN npm ci --only=production
 
 # Copy application files
 COPY index.js ./
+COPY confluence-integration.js ./
 COPY data/ ./data/
 
 # Create data directories if they don't exist
