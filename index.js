@@ -241,8 +241,6 @@ async function syncSlackMessagesToOpenAI(client, channel, slackThreadId, openaiT
   }
 }
 
-
-
 // Function to get or create OpenAI Assistant for a specific mode
 async function getOrCreateAssistant(mode = 'normal') {
   try {
