@@ -2,6 +2,7 @@ const { App } = require('@slack/bolt');
 const { OpenAI } = require('openai');
 const fs = require('fs');
 const path = require('path');
+const { parseConfluenceCommand, createConfluencePage, generateConfluenceContentFromThread } = require('./confluence-integration');
 require('dotenv').config();
 
 // Per-thread queue system to handle concurrent requests
@@ -506,6 +507,8 @@ async function summarizeThreadWithAssistant(slackThreadId, client, channel) {
   }
 }
 
+
+
 // Listen for mentions of "Leo" or "Leonard" in text (not @mentions or DMs)
 app.message(/\b(leo|leonard)\b/i, async ({ message, say, client }) => {
   try {
@@ -558,6 +561,107 @@ app.message(async ({ message, say, client }) => {
           text: prompts.mode_switch_responses[newMode],
           thread_ts: threadTs
         });
+        return;
+      }
+
+      // Check for Confluence command
+      const confluenceCommand = parseConfluenceCommand(messageText);
+      if (confluenceCommand.isConfluenceCommand) {
+        if (confluenceCommand.isHelpRequest) {
+          await say({
+            text: prompts.confluence_prompts.page_help,
+            thread_ts: threadTs
+          });
+          return;
+        }
+
+        // Get user display name for the page
+        const creatorName = await getUserDisplayName(client, message.user);
+
+        if (confluenceCommand.isSmartGeneration) {
+          // Smart generation: analyze thread and create content
+          await client.chat.postMessage({
+            channel: message.channel,
+            text: `🤖 Analyzing thread conversation and generating Confluence page based on: "${confluenceCommand.instructions}"...`,
+            thread_ts: threadTs
+          });
+
+          try {
+            // Get current mode and assistant
+            const currentMode = getThreadMode(threadTs);
+            const assistant = await getOrCreateAssistant(currentMode);
+
+            // Get or create OpenAI thread
+            const openaiThreadId = await getOrCreateOpenAIThread(threadTs, currentMode);
+
+            // Sync messages to ensure we have the full conversation
+            await syncSlackMessagesToOpenAI(client, message.channel, threadTs, openaiThreadId);
+
+            // Generate content from thread conversation
+            const contentResult = await generateConfluenceContentFromThread(
+              confluenceCommand.instructions,
+              openaiThreadId,
+              assistant.id,
+              openai,
+              queueThreadRequest
+            );
+
+            if (contentResult.success) {
+              // Create the Confluence page with generated content
+              const result = await createConfluencePage(
+                contentResult.title,
+                contentResult.content,
+                creatorName,
+                globalConfig,
+                saveGlobalConfig
+              );
+
+              if (result.success) {
+                await say({
+                  text: `${prompts.confluence_prompts.page_created}\n\n📄 **${result.title}**\n🤖 Generated based on thread analysis\n🌐 View page: ${result.url}`,
+                  thread_ts: threadTs
+                });
+              } else {
+                await say({
+                  text: `${prompts.error_prompts.confluence_error}\n\nError creating page: ${result.error}`,
+                  thread_ts: threadTs
+                });
+              }
+            } else {
+              await say({
+                text: `❌ Failed to generate content: ${contentResult.error}`,
+                thread_ts: threadTs
+              });
+            }
+          } catch (error) {
+            console.error('❌ Error in smart generation:', error);
+            await say({
+              text: `❌ Error generating page content: ${error.message}`,
+              thread_ts: threadTs
+            });
+          }
+        } else {
+          // Manual generation: use provided title and content
+          await client.chat.postMessage({
+            channel: message.channel,
+            text: prompts.confluence_prompts.creating_page,
+            thread_ts: threadTs
+          });
+
+          const result = await createConfluencePage(confluenceCommand.title, confluenceCommand.content, creatorName, globalConfig, saveGlobalConfig);
+
+          if (result.success) {
+            await say({
+              text: `${prompts.confluence_prompts.page_created}\n\n📄 **${result.title}**\n📝 ${confluenceCommand.content}\n🌐 View page: ${result.url}`,
+              thread_ts: threadTs
+            });
+          } else {
+            await say({
+              text: `${prompts.error_prompts.confluence_error}\n\nError: ${result.error}`,
+              thread_ts: threadTs
+            });
+          }
+        }
         return;
       }
 
@@ -624,6 +728,114 @@ app.event('app_mention', async ({ event, say, client }) => {
         channel: event.channel,
         thread_ts: threadTs
       });
+      return;
+    }
+
+    // Check for Confluence command
+    const confluenceCommand = parseConfluenceCommand(cleanText);
+    if (confluenceCommand.isConfluenceCommand) {
+      if (confluenceCommand.isHelpRequest) {
+        await say({
+          text: prompts.confluence_prompts.page_help,
+          channel: event.channel,
+          thread_ts: threadTs
+        });
+        return;
+      }
+
+      // Get user display name for the page
+      const creatorName = await getUserDisplayName(client, event.user);
+
+      if (confluenceCommand.isSmartGeneration) {
+        // Smart generation: analyze thread and create content
+        await client.chat.postMessage({
+          channel: event.channel,
+          text: `🤖 Analyzing thread conversation and generating Confluence page based on: "${confluenceCommand.instructions}"...`,
+          thread_ts: threadTs
+        });
+
+        try {
+          // Get current mode and assistant
+          const currentMode = getThreadMode(threadTs);
+          const assistant = await getOrCreateAssistant(currentMode);
+
+          // Get or create OpenAI thread
+          const openaiThreadId = await getOrCreateOpenAIThread(threadTs, currentMode);
+
+          // Sync messages to ensure we have the full conversation
+          await syncSlackMessagesToOpenAI(client, event.channel, threadTs, openaiThreadId);
+
+          // Generate content from thread conversation
+          const contentResult = await generateConfluenceContentFromThread(
+            confluenceCommand.instructions,
+            openaiThreadId,
+            assistant.id,
+            openai,
+            queueThreadRequest
+          );
+
+          if (contentResult.success) {
+            // Create the Confluence page with generated content
+            const result = await createConfluencePage(
+              contentResult.title,
+              contentResult.content,
+              creatorName,
+              globalConfig,
+              saveGlobalConfig
+            );
+
+            if (result.success) {
+              await say({
+                text: `${prompts.confluence_prompts.page_created}\n\n📄 **${result.title}**\n🤖 Generated based on thread analysis\n🌐 View page: ${result.url}`,
+                channel: event.channel,
+                thread_ts: threadTs
+              });
+            } else {
+              await say({
+                text: `${prompts.error_prompts.confluence_error}\n\nError creating page: ${result.error}`,
+                channel: event.channel,
+                thread_ts: threadTs
+              });
+            }
+          } else {
+            await say({
+              text: `❌ Failed to generate content: ${contentResult.error}`,
+              channel: event.channel,
+              thread_ts: threadTs
+            });
+          }
+        } catch (error) {
+          console.error('❌ Error in smart generation:', error);
+          await say({
+            text: `❌ Error generating page content: ${error.message}`,
+            channel: event.channel,
+            thread_ts: threadTs
+          });
+        }
+      } else {
+        // Manual generation: use provided title and content
+        await client.chat.postMessage({
+          channel: event.channel,
+          text: prompts.confluence_prompts.creating_page,
+          thread_ts: threadTs
+        });
+
+        const result = await createConfluencePage(confluenceCommand.title, confluenceCommand.content, creatorName, globalConfig, saveGlobalConfig);
+
+        if (result.success) {
+          await say({
+            text: `${prompts.confluence_prompts.page_created}\n\n📄 **${result.title}**\n📝 ${confluenceCommand.content}\n🌐 View page: ${result.url}`,
+            channel: event.channel,
+            thread_ts: threadTs
+          });
+        } else {
+          await say({
+            text: `${prompts.error_prompts.confluence_error}\n\nError: ${result.error}`,
+            channel: event.channel,
+            thread_ts: threadTs
+          });
+        }
+      }
       return;
     }
 
@@ -702,7 +914,12 @@ app.error((error) => {
     await app.start();
     console.log('⚡️ Leo Multi-Mode Bot is running!');
     console.log(`🎭 Available modes: ${availableModes.join(', ')}`);
-    console.log(`📈 Stats: ${globalConfig.statistics.total_threads} threads, ${globalConfig.statistics.total_messages} messages, ${globalConfig.statistics.mode_switches} mode switches, startup #${globalConfig.statistics.startup_count}`);
+    console.log(`📄 Confluence integration: ${globalConfig.confluence_settings.enabled ? '✅ Enabled' : '❌ Disabled'}`);
+
+    // Gather statistics
+    const confluencePages = globalConfig.statistics.confluence_pages_created || 0;
+
+    console.log(`📈 Stats: ${globalConfig.statistics.total_threads} threads, ${globalConfig.statistics.total_messages} messages, ${globalConfig.statistics.mode_switches} mode switches, ${confluencePages} Confluence pages, startup #${globalConfig.statistics.startup_count}`);
   } catch (error) {
     console.error('❌ Failed to start the app:', error);
   }

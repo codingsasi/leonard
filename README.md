@@ -12,6 +12,7 @@ A helpful conversational Slack bot with multiple personality modes. This bot sho
 - 💾 **Data Persistence**: Stores thread data and configuration locally
 - 🔄 **Message Syncing**: Automatically syncs Slack thread history to maintain context
 - ⚡ **Queue Management**: Handles concurrent requests efficiently with per-thread queuing
+- 📊 **Confluence Integration**: Creates confluence page from instructions
 
 ## Prerequisites
 
