@@ -3,6 +3,7 @@ const { OpenAI } = require('openai');
 const fs = require('fs');
 const path = require('path');
 const { parseConfluenceCommand, createConfluencePage, generateConfluenceContentFromThread } = require('./confluence-integration');
+const { parseJiraCommand, createJiraIssue, generateJiraContentFromThread } = require('./jira-integration');
 require('dotenv').config();
 
 // Per-thread queue system to handle concurrent requests
@@ -507,8 +508,6 @@ async function summarizeThreadWithAssistant(slackThreadId, client, channel) {
   }
 }
 
-
-
 // Listen for mentions of "Leo" or "Leonard" in text (not @mentions or DMs)
 app.message(/\b(leo|leonard)\b/i, async ({ message, say, client }) => {
   try {
@@ -658,6 +657,107 @@ app.message(async ({ message, say, client }) => {
           } else {
             await say({
               text: `${prompts.error_prompts.confluence_error}\n\nError: ${result.error}`,
+              thread_ts: threadTs
+            });
+          }
+        }
+        return;
+      }
+
+      // Check for Jira command
+      const jiraCommand = parseJiraCommand(messageText);
+      if (jiraCommand.isJiraCommand) {
+        if (jiraCommand.isHelpRequest) {
+          await say({
+            text: prompts.jira_prompts.issue_help,
+            thread_ts: threadTs
+          });
+          return;
+        }
+
+        // Get user display name for the issue
+        const creatorName = await getUserDisplayName(client, message.user);
+
+        if (jiraCommand.isSmartGeneration) {
+          // Smart generation: analyze thread and create content
+          await client.chat.postMessage({
+            channel: message.channel,
+            text: `🤖 Analyzing thread conversation and generating Jira issue based on: "${jiraCommand.instructions}"...`,
+            thread_ts: threadTs
+          });
+
+          try {
+            // Get current mode and assistant
+            const currentMode = getThreadMode(threadTs);
+            const assistant = await getOrCreateAssistant(currentMode);
+
+            // Get or create OpenAI thread
+            const openaiThreadId = await getOrCreateOpenAIThread(threadTs, currentMode);
+
+            // Sync messages to ensure we have the full conversation
+            await syncSlackMessagesToOpenAI(client, message.channel, threadTs, openaiThreadId);
+
+            // Generate content from thread conversation
+            const contentResult = await generateJiraContentFromThread(
+              jiraCommand.instructions,
+              openaiThreadId,
+              assistant.id,
+              openai,
+              queueThreadRequest
+            );
+
+            if (contentResult.success) {
+              // Create the Jira issue with generated content
+              const result = await createJiraIssue(
+                contentResult.title,
+                contentResult.description,
+                creatorName,
+                globalConfig,
+                saveGlobalConfig
+              );
+
+              if (result.success) {
+                await say({
+                  text: `${prompts.jira_prompts.issue_created}\n\n🎫 **${result.title}** (${result.key})\n🤖 Generated based on thread analysis\n🌐 View issue: ${result.url}`,
+                  thread_ts: threadTs
+                });
+              } else {
+                await say({
+                  text: `${prompts.error_prompts.jira_error}\n\nError creating issue: ${result.error}`,
+                  thread_ts: threadTs
+                });
+              }
+            } else {
+              await say({
+                text: `❌ Failed to generate content: ${contentResult.error}`,
+                thread_ts: threadTs
+              });
+            }
+          } catch (error) {
+            console.error('❌ Error in smart generation:', error);
+            await say({
+              text: `❌ Error generating issue content: ${error.message}`,
+              thread_ts: threadTs
+            });
+          }
+        } else {
+          // Manual generation: use provided title and description
+          await client.chat.postMessage({
+            channel: message.channel,
+            text: prompts.jira_prompts.creating_issue,
+            thread_ts: threadTs
+          });
+
+          const result = await createJiraIssue(jiraCommand.title, jiraCommand.description, creatorName, globalConfig, saveGlobalConfig);
+
+          if (result.success) {
+            await say({
+              text: `${prompts.jira_prompts.issue_created}\n\n🎫 **${result.title}** (${result.key})\n📝 Issue created in Jira\n🌐 View issue: ${result.url}`,
+              thread_ts: threadTs
+            });
+          } else {
+            await say({
+              text: `${prompts.error_prompts.jira_error}\n\nError: ${result.error}`,
               thread_ts: threadTs
             });
           }
@@ -839,7 +939,115 @@ app.event('app_mention', async ({ event, say, client }) => {
       return;
     }
 
-        // Check for summary request
+    // Check for Jira command
+    const jiraCommand = parseJiraCommand(cleanText);
+    if (jiraCommand.isJiraCommand) {
+      if (jiraCommand.isHelpRequest) {
+        await say({
+          text: prompts.jira_prompts.issue_help,
+          channel: event.channel,
+          thread_ts: threadTs
+        });
+        return;
+      }
+
+      // Get user display name for the issue
+      const creatorName = await getUserDisplayName(client, event.user);
+
+      if (jiraCommand.isSmartGeneration) {
+        // Smart generation: analyze thread and create content
+        await client.chat.postMessage({
+          channel: event.channel,
+          text: `🤖 Analyzing thread conversation and generating Jira issue based on: "${jiraCommand.instructions}"...`,
+          thread_ts: threadTs
+        });
+
+        try {
+          // Get current mode and assistant
+          const currentMode = getThreadMode(threadTs);
+          const assistant = await getOrCreateAssistant(currentMode);
+
+          // Get or create OpenAI thread
+          const openaiThreadId = await getOrCreateOpenAIThread(threadTs, currentMode);
+
+          // Sync messages to ensure we have the full conversation
+          await syncSlackMessagesToOpenAI(client, event.channel, threadTs, openaiThreadId);
+
+          // Generate content from thread conversation
+          const contentResult = await generateJiraContentFromThread(
+            jiraCommand.instructions,
+            openaiThreadId,
+            assistant.id,
+            openai,
+            queueThreadRequest
+          );
+
+          if (contentResult.success) {
+            // Create the Jira issue with generated content
+            const result = await createJiraIssue(
+              contentResult.title,
+              contentResult.description,
+              creatorName,
+              globalConfig,
+              saveGlobalConfig
+            );
+
+            if (result.success) {
+              await say({
+                text: `${prompts.jira_prompts.issue_created}\n\n🎫 **${result.title}** (${result.key})\n🤖 Generated based on thread analysis\n🌐 View issue: ${result.url}`,
+                channel: event.channel,
+                thread_ts: threadTs
+              });
+            } else {
+              await say({
+                text: `${prompts.error_prompts.jira_error}\n\nError creating issue: ${result.error}`,
+                channel: event.channel,
+                thread_ts: threadTs
+              });
+            }
+          } else {
+            await say({
+              text: `❌ Failed to generate content: ${contentResult.error}`,
+              channel: event.channel,
+              thread_ts: threadTs
+            });
+          }
+        } catch (error) {
+          console.error('❌ Error in smart generation:', error);
+          await say({
+            text: `❌ Error generating issue content: ${error.message}`,
+            channel: event.channel,
+            thread_ts: threadTs
+          });
+        }
+      } else {
+        // Manual generation: use provided title and description
+        await client.chat.postMessage({
+          channel: event.channel,
+          text: prompts.jira_prompts.creating_issue,
+          thread_ts: threadTs
+        });
+
+        const result = await createJiraIssue(jiraCommand.title, jiraCommand.description, creatorName, globalConfig, saveGlobalConfig);
+
+        if (result.success) {
+          await say({
+            text: `${prompts.jira_prompts.issue_created}\n\n🎫 **${result.title}** (${result.key})\n📝 Issue created in Jira\n🌐 View issue: ${result.url}`,
+            channel: event.channel,
+            thread_ts: threadTs
+          });
+        } else {
+          await say({
+            text: `${prompts.error_prompts.jira_error}\n\nError: ${result.error}`,
+            channel: event.channel,
+            thread_ts: threadTs
+          });
+        }
+      }
+      return;
+    }
+
+    // Check for summary request
     if (cleanText.toLowerCase().includes('summarize') || cleanText.toLowerCase().includes('summarise') || cleanText.toLowerCase().includes('summary')) {
       const summary = await summarizeThreadWithAssistant(threadTs, client, event.channel);
       await say({
@@ -915,11 +1123,13 @@ app.error((error) => {
     console.log('⚡️ Leo Multi-Mode Bot is running!');
     console.log(`🎭 Available modes: ${availableModes.join(', ')}`);
     console.log(`📄 Confluence integration: ${globalConfig.confluence_settings.enabled ? '✅ Enabled' : '❌ Disabled'}`);
+    console.log(`🎫 Jira integration: ${globalConfig.jira_settings.enabled ? '✅ Enabled' : '❌ Disabled'}`);
 
     // Gather statistics
     const confluencePages = globalConfig.statistics.confluence_pages_created || 0;
+    const jiraIssues = globalConfig.statistics.jira_issues_created || 0;
 
-    console.log(`📈 Stats: ${globalConfig.statistics.total_threads} threads, ${globalConfig.statistics.total_messages} messages, ${globalConfig.statistics.mode_switches} mode switches, ${confluencePages} Confluence pages, startup #${globalConfig.statistics.startup_count}`);
+    console.log(`📈 Stats: ${globalConfig.statistics.total_threads} threads, ${globalConfig.statistics.total_messages} messages, ${globalConfig.statistics.mode_switches} mode switches, ${confluencePages} Confluence pages, ${jiraIssues} Jira issues, startup #${globalConfig.statistics.startup_count}`);
   } catch (error) {
     console.error('❌ Failed to start the app:', error);
   }
