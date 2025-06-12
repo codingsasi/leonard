@@ -4,6 +4,55 @@ const fs = require('fs');
 const path = require('path');
 require('dotenv').config();
 
+// Per-thread queue system to handle concurrent requests
+const threadQueues = new Map(); // Map of threadId -> { queue: [], isProcessing: false }
+
+// Function to process queue for a specific thread
+async function processThreadQueue(openaiThreadId) {
+  const threadQueue = threadQueues.get(openaiThreadId);
+  if (!threadQueue || threadQueue.isProcessing || threadQueue.queue.length === 0) {
+    return;
+  }
+
+  threadQueue.isProcessing = true;
+  console.log(`🔄 Processing queue for thread ${openaiThreadId} (${threadQueue.queue.length} items)`);
+
+  while (threadQueue.queue.length > 0) {
+    const { fn, resolve, reject } = threadQueue.queue.shift();
+    try {
+      console.log(`⚡ Processing request for OpenAI thread: ${openaiThreadId}`);
+      const result = await fn();
+      resolve(result);
+    } catch (error) {
+      console.error(`❌ Queue processing error for thread ${openaiThreadId}:`, error);
+      reject(error);
+    }
+  }
+
+  threadQueue.isProcessing = false;
+  console.log(`✅ Queue processing completed for thread ${openaiThreadId}`);
+
+  // Clean up empty queues
+  if (threadQueue.queue.length === 0) {
+    threadQueues.delete(openaiThreadId);
+  }
+}
+
+// Function to add request to per-thread queue
+function queueThreadRequest(fn, openaiThreadId) {
+  return new Promise((resolve, reject) => {
+    if (!threadQueues.has(openaiThreadId)) {
+      threadQueues.set(openaiThreadId, { queue: [], isProcessing: false });
+    }
+
+    const threadQueue = threadQueues.get(openaiThreadId);
+    threadQueue.queue.push({ fn, resolve, reject });
+
+    console.log(`➕ Added request to queue for OpenAI thread: ${openaiThreadId} (queue size: ${threadQueue.queue.length})`);
+    processThreadQueue(openaiThreadId);
+  });
+}
+
 // Load prompts from JSON file
 const prompts = JSON.parse(fs.readFileSync(path.join(__dirname, 'data', 'prompts.json'), 'utf8'));
 
@@ -257,53 +306,58 @@ async function generateRhymingResponseWithAssistant(message, slackThreadId, clie
       content: message
     });
 
-    // Create and run the assistant
-    console.log('🏃 Running assistant...');
-    const run = await openai.beta.threads.runs.create(openaiThreadId, {
-      assistant_id: assistant.id
-    });
+    // Queue the assistant run to prevent concurrent runs on same thread
+    const response = await queueThreadRequest(async () => {
+      // Create and run the assistant
+      console.log('🏃 Running assistant...');
+      const run = await openai.beta.threads.runs.create(openaiThreadId, {
+        assistant_id: assistant.id
+      });
 
-    let runStatus = run;
-    while (runStatus.status === 'queued' || runStatus.status === 'in_progress') {
-      await new Promise(resolve => setTimeout(resolve, 1000)); // Wait 1 second
+      let runStatus = run;
+      while (runStatus.status === 'queued' || runStatus.status === 'in_progress') {
+        await new Promise(resolve => setTimeout(resolve, 1000)); // Wait 1 second
 
-      try {
-        runStatus = await openai.beta.threads.runs.retrieve(run.id, { thread_id: openaiThreadId });
-        console.log('⏳ Assistant status:', runStatus.status);
-      } catch (error) {
-        console.log('⚠️ Error retrieving run status:', error);
+        try {
+          runStatus = await openai.beta.threads.runs.retrieve(run.id, { thread_id: openaiThreadId });
+          console.log('⏳ Assistant status:', runStatus.status);
+        } catch (error) {
+          console.log('⚠️ Error retrieving run status:', error);
+        }
       }
-    }
 
-    if (runStatus.status === 'completed') {
-      // Get the assistant's response
-      const messages = await openai.beta.threads.messages.list(openaiThreadId);
-      const lastMessage = messages.data[0];
+      if (runStatus.status === 'completed') {
+        // Get the assistant's response
+        const messages = await openai.beta.threads.messages.list(openaiThreadId);
+        const lastMessage = messages.data[0];
 
-      if (lastMessage.role === 'assistant') {
-        const response = lastMessage.content[0].text.value;
-        console.log('✨ Assistant response:', response);
+        if (lastMessage.role === 'assistant') {
+          const responseText = lastMessage.content[0].text.value;
+          console.log('✨ Assistant response:', responseText);
 
-        // Update thread data with current message timestamp as last processed
-        const threadData = loadThreadData(slackThreadId);
-        const updatedThreadData = {
-          ...(threadData || {}),
-          last_processed_message_ts: messageTs
-        };
-        saveThreadData(slackThreadId, updatedThreadData);
+          // Update thread data with current message timestamp as last processed
+          const threadData = loadThreadData(slackThreadId);
+          const updatedThreadData = {
+            ...(threadData || {}),
+            last_processed_message_ts: messageTs
+          };
+          saveThreadData(slackThreadId, updatedThreadData);
 
-        // Update message statistics
-        globalConfig.statistics.total_messages += 1;
-        saveGlobalConfig();
+          // Update message statistics
+          globalConfig.statistics.total_messages += 1;
+          saveGlobalConfig();
 
-        return response;
+          return responseText;
+        }
+      } else {
+        console.error('❌ Assistant run failed:', runStatus.status);
+        return prompts.error_prompts.api_error;
       }
-    } else {
-      console.error('❌ Assistant run failed:', runStatus.status);
+
       return prompts.error_prompts.api_error;
-    }
+    }, openaiThreadId);
 
-    return prompts.error_prompts.api_error;
+    return response;
   } catch (error) {
     console.error('❌ Error generating response with assistant:', error);
     return prompts.error_prompts.api_error;
@@ -323,40 +377,46 @@ async function summarizeThreadWithAssistant(slackThreadId) {
 
     // Get or create assistant
     const assistant = await getOrCreateAssistant();
+    const openaiThreadId = threadData.thread_id;
 
     // Add summary request to thread
-    await openai.beta.threads.messages.create(threadData.thread_id, {
+    await openai.beta.threads.messages.create(openaiThreadId, {
       role: "user",
       content: "Please provide a summary of our entire conversation thread so far. Include the main topics we discussed and key points covered."
     });
 
-    // Create and run the assistant
-    const run = await openai.beta.threads.runs.create(threadData.thread_id, {
-      assistant_id: assistant.id
-    });
+    // Queue the assistant run to prevent concurrent runs on same thread
+    const summary = await queueThreadRequest(async () => {
+      // Create and run the assistant
+      const run = await openai.beta.threads.runs.create(openaiThreadId, {
+        assistant_id: assistant.id
+      });
 
-    let runStatus = run;
-    while (runStatus.status === 'queued' || runStatus.status === 'in_progress') {
-      await new Promise(resolve => setTimeout(resolve, 1000));
+      let runStatus = run;
+      while (runStatus.status === 'queued' || runStatus.status === 'in_progress') {
+        await new Promise(resolve => setTimeout(resolve, 1000));
 
-      try {
-        runStatus = await openai.beta.threads.runs.retrieve(run.id, { thread_id: threadData.thread_id });
-      } catch (error) {
-        console.log('⚠️ Error retrieving run status:', error);
+        try {
+          runStatus = await openai.beta.threads.runs.retrieve(run.id, { thread_id: openaiThreadId });
+        } catch (error) {
+          console.log('⚠️ Error retrieving run status:', error);
+        }
       }
-    }
 
-    if (runStatus.status === 'completed') {
-      const messages = await openai.beta.threads.messages.list(threadData.thread_id);
-      const lastMessage = messages.data[0];
+      if (runStatus.status === 'completed') {
+        const messages = await openai.beta.threads.messages.list(openaiThreadId);
+        const lastMessage = messages.data[0];
 
-      if (lastMessage.role === 'assistant') {
-        const summary = lastMessage.content[0].text.value;
-        return summary;
+        if (lastMessage.role === 'assistant') {
+          const summaryText = lastMessage.content[0].text.value;
+          return summaryText;
+        }
       }
-    }
 
-    return "A summary I tried to make with care, but errors appeared from thin air! 📝";
+      return "A summary I tried to make with care, but errors appeared from thin air! 📝";
+    }, openaiThreadId);
+
+    return summary;
   } catch (error) {
     console.error('❌ Error summarizing thread:', error);
     return "A summary I tried to make with care, but errors appeared from thin air! 📝";
